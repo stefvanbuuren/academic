@@ -13,7 +13,7 @@ weight = 5
     "Statistics",
     "Missing data",
     "Child growth and development",
-    "Comparability"
+    "Measurement"
   ]
 
 # List your qualifications (such as academic degrees).
@@ -32,6 +32,6 @@ weight = 5
 
 # Biography
 
-Stef van Buuren is professor of Statistical Analysis of Incomplete Data at the University of Utrecht and statistician at the Netherlands Organisation for Applied Scientific Research TNO in Leiden. His interests include the analysis of incomplete data, child growth and development, computational statistics and individual causal effects. Van Buuren is the inventor of the MICE algorithm that finds suitable replacement values for the missing data. 
+Stef van Buuren is professor of Statistical Analysis of Incomplete Data at the University of Utrecht and statistician at the Netherlands Organisation for Applied Scientific Research TNO in Leiden. His interests include the analysis of incomplete data, child growth and development, computational statistics, measurement and individual causal effects. 
 
-Van Buuren created the growth charts that are being used in the Dutch child health care system and designed the D-score, a new system for expressing child development on a quantitative scale. He consults for World Health Organization and Bill & Melinda Gates Foundation.
+Van Buuren is the inventor of the *MICE algorithm* for multiple imputation of missing data. He created the *growth charts* that are being used in the Dutch child health care system, and designed the *D-score*, a new system for expressing child development on a quantitative scale. He consults for the World Health Organization and the Bill & Melinda Gates Foundation.
