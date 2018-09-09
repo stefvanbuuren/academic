@@ -1,8 +1,8 @@
 +++
-title = "Predictie van groei vanaf jonge leeftijd: Curve matchingmet de TNO Groeivoorspeller [Prediction of growth from an early age: curve matching with the TNO growth predictor]"
+title = "Predictie van groei vanaf jonge leeftijd: Curve matching’met de TNO Groeivoorspeller [Prediction of growth from an early age: curve matching with the TNO growth predictor]"
 date = "2015-01-01"
 publication_types = ["2"]
-authors = ["S. {van Buuren}", "R.A. Bezemer", "S.A. Reijneveld", "M.P. Hoir"]
+authors = ["S. van Buuren", "R.A. Bezemer", "S.A. Reijneveld", "M.P. Hoir"]
 publication = "In: Nederlands Tijdschrift voor Geneeskunde, 159, A8547"
 abstract = ""
 abstract_short = ""

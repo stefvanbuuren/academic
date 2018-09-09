@@ -2,7 +2,7 @@
 title = "Hoe groeien te vroeg geboren kinderen in Nederland gedurende de eerste vier levensjaren? Resultaten van het Pinkeltje Onderzoek II"
 date = "2013-01-01"
 publication_types = ["2"]
-authors = ["{ten Vergert-Jordans E.M.J}", "I.F.A. Bocca-Tjeertes", "J.M. Kerstjens", "S. {van Buuren}", "A.F. {de Winter}", "S.A. Reijneveld", "A.F. Bos"]
+authors = ["ten Vergert-Jordans E.M.J", "I.F.A. Bocca-Tjeertes", "J.M. Kerstjens", "S. van Buuren", "A.F. de Winter", "S.A. Reijneveld", "A.F. Bos"]
 publication = "In: Tijdschrift voor Jeugdgezondheidszorg, (4), _pp. 78--87_"
 abstract = ""
 abstract_short = ""

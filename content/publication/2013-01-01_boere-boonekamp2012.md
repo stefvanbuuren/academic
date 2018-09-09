@@ -1,9 +1,9 @@
 +++
 title = "Screening for developmental disability is possible"
 date = "2013-01-01"
-publication_types = ["2"]
-authors = ["M.M. Boere-Boonekamp", "E. Dusseldorp", "E. {Hafkamp-de Groen}", "A.M. Oudesluijs-Murphy", "S. {van Buuren}", "P.H. Verkerk"]
-publication = "In: submitted for publication"
+publication_types = ["0"]
+authors = ["M.M. Boere-Boonekamp", "E. Dusseldorp", "E. Hafkamp-de Groen", "A.M. Oudesluijs-Murphy", "S. van Buuren", "P.H. Verkerk"]
+publication = ""
 abstract = ""
 abstract_short = ""
 image_preview = ""

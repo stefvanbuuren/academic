@@ -2,7 +2,7 @@
 title = "Looking back at the Gifi system of nonlinear multivariate analysis"
 date = "2016-01-01"
 publication_types = ["2"]
-authors = ["P.G.M. {van der Heijden}", "S. {van Buuren}"]
+authors = ["P.G.M. van der Heijden", "S. van Buuren"]
 publication = "In: Journal of Statistical Software, (73), 4"
 abstract = ""
 abstract_short = ""
