@@ -1,0 +1,805 @@
+ /*-------------------------------------------------------------------*
+  * TRIM SAS        Multiple imputation program                       *
+  *                 with transformation towards normality             *
+  *-------------------------------------------------------------------*
+  *  Author:  Stef van Buuren, TNO Leiden <BUUREN@NIPG.TNO.NL>        *
+  * Created:  April 3, 1993                                           *
+  * Revised:  May 26, 1993 0.12 Logit and probit imputation added     *
+  * Revised:  May 28, 1993 0.14 Adapted for both continuous and bin.  *
+  * Revised:  Jun, 2, 1993 0.15 Various debugging changes             *
+  * Revised:  Jun,15, 1993 0.16 Separate IML file created             *
+  * Revised:  Aug,20, 1993 0.17 Delta (untransf)  changed             *
+  * Version:  0.17                                                    *
+  *    Code:  SAS/IML 6.07                                            *
+  *     See:  1 van Buuren, S., van Rijckevorsel, J.L.A. &            *
+  *             Rubin, D.B. (1993). "Multiple imputation by splines"  *
+  *             Submitted to ISI 1993 Meeting in Florence             *
+  *           2 Rubin, D.B. (1987). "Multiple imputation for          *
+  *             nonresponse in surveys". Wiley, New York.             *
+  *           3 Rubin, D.B. & Schafer, J.L. (1990). "Efficiently      *
+  *             creating multiple imputations for incomplete          *
+  *             multivariate normal data". ASA 1990 Proc. Stat. Comp. *
+  *             Sect., ASA.                                           *
+  *                                                                   *
+  *-------------------------------------------------------------------*/
+
+proc iml;
+reset log noprint fw=5 nocenter;
+
+
+ /*-------------------------------------------------------------------*
+  * STAND(x)
+  * Standardizes x to mean 1 and variance 1. Ignores constant terms.
+  * INPUT   x                  data matrix
+  * OUTPUT  x                  standardized data matrix
+  *-------------------------------------------------------------------*/
+start STAND(x);
+    n = nrow(x);
+    xd = x - repeat(x[:,], n, 1);
+    std = sqrt(xd[##,] / n);
+    std = choose(std<0.00000001, 1, std);
+    xd  = choose(std<0.00000001, x, xd);
+    x = xd * diag(1/std);
+finish STAND;
+
+
+ /*-------------------------------------------------------------------*
+  * COVMAT(c, x)
+  * Computes the covariance matrix of x.
+  * INPUT   x                  data matrix
+  * OUTPUT  c                  covariance matrix
+  *-------------------------------------------------------------------*/
+start COVMAT(c, x);
+    n = nrow(x);
+    xd = x - repeat(x[:,], n, 1);
+    c = (t(xd) * xd) / n;
+finish COVMAT;
+
+
+ /*-------------------------------------------------------------------*
+  * INVERT(b, a)
+  * Invert matrix: b = inv(a).
+  * The routine checks on singularity.
+  *
+  * INPUT   a    (n,n)         square matrix
+  * OUTPUT  b    (n,n)         inv(a)
+  *
+  * The function returns 1 if matrix a is singular.
+  * On singularity, all elements of b are set to missing.
+  * The function returns 0 if matrix a is non-singular.
+  *
+  *         Adapted form IML Reference Guide, p. 223.
+  *         Version 2 (April 5, 1993), SAS/IML V6.0.7
+  *         Version 3 (May 26, 1993), SAS/IML V6.0.7
+  *-------------------------------------------------------------------*/
+start INVERT(b, a);
+    msg = "    Matrix is singular - result set to missing ";
+    onerror = "if singular then do; b=a#.; print msg; print b;
+               call push(onerror); resume; end;";
+    call push(onerror);
+    singular = 1;
+    b = inv(a);
+    singular = 0;
+    return(singular);
+finish INVERT;
+
+
+/* COR */
+start cor(c, x);
+    n = nrow(x);
+    sum = x[+,];
+    xpx = t(x)*x - t(sum)*sum/n;
+    s=diag(1/sqrt(vecdiag(xpx)));
+    c = s * xpx * s;
+finish cor;
+
+/* Test for multivariate independence of the correlation matrix */
+/* See Kendall & Stuart, 4th ed, vol 3, p. 329 */
+start mvind(c, n);     /* c=correlation matrix, n=sample size */
+    m = ncol(c);
+    chi = -(n - ((2 # m + 11) / 6)) # log(det(c));
+    df = 0.5 # m # (m - 1);
+    p = 1 - probchi(chi, df);
+    return(p);
+finish mvind;
+
+
+ /*-------------------------------------------------------------------*
+  * MVN(x, n, m, c, seed)
+  * Draws n observations from a multivariate normal distribution
+  * with means m and covariance matrix c.
+  * Method: Let X = Zh + m, where h is the upper triangular matrix
+  *         satistying h'h=c and where Z are N(0,1) deviates.
+  *         See Dagnapur, 1998, p. 157.
+  * INPUT   n       (1, 1)     number of rows
+  *         m       (1, p)     means
+  *         c       (p, p)     psd (covariance) matrix
+  *         seed    (1, 1)     random number generator seed
+  * OUTPUT  x       (n, p)     generated data matrix
+  *-------------------------------------------------------------------*/
+start MVN(x, n, m, c, seed);
+    x = normal(j(n, ncol(m), seed));
+    x = repeat(m, n, 1) + x * half(c);
+finish MVN;
+
+
+
+
+
+ /*-------------------------------------------------------------------*
+  * GIBBSIT(imp, b, data, r, m, type, meth, model)
+  * One iteration of the Gibbs sampler with m parallel sequences
+  * using a linear regression model for continuous variables,
+  * or logistic/probit regression for binary data.
+  *
+  * Parameter description
+  * INPUT   imp     (ntmis, m+1)  imputation array
+  *         b       (ntpred, m+1) weights in log/prob regression
+  *         data    (nobs, nvar)  data
+  *         r       (nobs, nvar)  response indicator (1=obs,0=mis)
+  *         m       (1,1)         number of multiple imputations
+  *         type    (1,m)         1=continuous, 2=binary
+  *         meth    (1,1)         method (1=normal, 2=hd, 3=match)
+  *         model   (1,1)         binary model (1=logistic, 2=probit)
+  * OUTPUT  imp     (ntmis, m+1)  update of imputations
+  *         b       (ntpred, m+1) updated weights
+  *
+  * Calls: REGIMP, LOGIMP
+  *
+  * Function returns:
+  *  0: OK
+  *  1 <= j <= nvar:  number of predictors exceeds number of valid cases
+  *                   variable j. No imputations will be done for j.
+  * -1 <= j <= -nvar: X'X is singular for variable -j. No imputations
+  *                   will be generated for variable -j.
+  *
+  * Author: Stef van Buuren, TNO Leiden.
+  *         Version 4 (April 26, 1993), SAS/IML V6.0.7
+  *         Version 5 (May 26, 1993), SAS/IML V6.0.7
+  *-------------------------------------------------------------------*/
+start GIBBSIT(imp, b, data, r, m, type, meth, model);
+    m1 = m + 1;
+    nobs = nrow(data);                              /* # observations */
+    nvar = ncol(data);                                 /* # variables */
+    q = nvar - 1;                                     /* # predictors */
+    z = 0;
+    do j = 1 to nvar;
+        y = data[,j];                           /* dependent variable */
+        ry = r[,j];                             /* response indicator */
+        n1 = sum(ry);
+        if n1 < q then return(j);
+        n0 = nobs - n1;                     /* # missing observations */
+        if n0 = 0 then goto next;
+        idx = loc(j^=(1:nvar));
+        x = data[,idx];                                 /* predictors */
+        rx = r[,idx];                            /* predictor respons */
+        bool = (j ^= imp[,m1]);
+        if any(bool) then f = imp[loc(bool), 1:m];  /* predictor imps */
+        else f = 0;
+        if type[j] = 1 then do;             /* continuous: linear reg */
+            if regimp(z, y, ry, x, rx, f, m, meth) then return(-j);
+        end;
+        if type[j] = 2 then do;               /* binary: log/prob reg */
+*reset print;
+            *print 'var = ' j;
+            bj = b[loc(j=b[,m1]), 1:m];
+            if logimp(z, bj, y, ry, x, rx, f, m, model) then return(-j);
+            b[loc(j=b[,m1]), 1:m] = bj;
+*reset noprint;
+        end;
+        imp[loc(j=imp[,m1]), 1:m] = z;          /* store imputations */
+        next:
+    end;
+    return(0);
+finish GIBBSIT;
+
+
+ /*-------------------------------------------------------------------*
+  * REGIMP(z, y, ry, x, rx, f, m, meth)
+  * Multiple imputation by linear regression of x on y as described
+  * in Rubin (1987, p. 167-168).
+  *
+  * After finding BETA and SIGMA, the method consists of steps:
+  * 1. Draw SIGMA^2, i.e. the residual variance
+  * 2. Draw BETA given SIGMA^2
+  * 3. Draw y(mis) given BETA and SIGMA^2.
+  *
+  * Step 3 is implemented by three methods (cf. Rubin, 1987):
+  * 3a. Normal:   Draw from normal distribution N(0,SIGMA^2)
+  * 3b. Hot-deck: Draw from observed standardized residuals
+  * 3c. Match:    Take observed y that is closest to prediction.
+  *
+  * Parameter description
+  * INPUT   y       (nobs, 1)     dependent variable
+  *         ry      (nobs, 1)     respons indicator for y
+  *         x       (nobs, q)     predictors
+  *         rx      (nobs, q)     respons indicator for x
+  *         f       (nmisx, m)    imputations for x
+  *         m       (1,1)         number of multiple imputations
+  *         meth    (1,1)         method (1=normal, 2=hd, 3=match)
+  * OUTPUT  z       (n0, m)       imputations for y
+  *
+  * Function returns:
+  *  0: OK
+  *  1: X'X is singular. No imputations will be generated.
+  *
+  * Author: Stef van Buuren, TNO Leiden.
+  *         Version 3 (April 26, 1993), SAS/IML V6.0.7
+  *         Version 4 (May 28, 1993) De-parralel method
+  *-------------------------------------------------------------------*/
+start REGIMP(z, y, ry, x, rx, f, m, meth);
+    v = 0;
+    y = y[loc(ry),];                             /* observed response */
+    n1 = nrow(y);                             /* # valid observations */
+    n0 = nrow(ry) - n1;                     /* # missing observations */
+    q = ncol(x);
+    df = n1 - q;
+    chi = 2 # rangam(j(1, m, -1), df/2);
+    chi = choose(chi<0.1, 0.1, chi);          /* truncate chi-square */
+    free z;
+    do i = 1 to m;
+        bool = (rx = 0);
+        if any(bool) then x[loc(bool)] = f[,i]; /* augment predictors */
+        xo = x[loc(ry),];                     /* predictors of y(obs) */
+        xm = x[loc(ry=0),];                   /* predictors of y(mis) */
+
+        if invert(v, t(xo)*xo) then return(1);          /* invert x'x */
+        b = v * t(xo) * y;                     /* parameter estimates */
+        yhat = xo * b;
+        res = y - yhat;
+        sse = res[##,];                                  /* ssq error */
+        sigma = sqrt(sse/chi[,i]);
+        v = (v` + v) / 2;                               /* symmetrize */
+        b = b + sigma # t(root(v)) * normal(j(q, 1, 0));
+
+        if (meth = 1) then do;                     /* 1. normal model */
+            zi = xm * b + normal(j(n0, 1, 0)) # sigma;
+        end;
+        else if (meth = 2) then do;      /* 2. standardized residuals */
+            stdres = res / repeat(sqrt(sse/n1), n1, 1);
+            noise = stdres[ceil(n1#uniform(j(1,n0,0))),];
+            zi = xm * b + noise # sigma;
+        end;
+        else if (meth = 3) then do;         /* 3. closest observation */
+            ym = shape(xm * b, n1, n0);
+            yo = repeat(yhat, 1, n0);
+            zi = y[(abs(ym-yo))[>:<,],];      /* draw from observed y */
+            zi = shape(zi, n0, 1);
+        end;
+        z = z || zi;
+    end;
+    return(0);
+finish REGIMP;
+
+
+ /*-------------------------------------------------------------------*
+  * LOGIMP(z, b, y, ry, x, rx, f, m, model)
+  * Multiple imputation for binary response variables by logistic
+  * or probit regression models. See Rubin (1987, p. 169-170) for
+  * a description using the logit model.
+  * The method executes m parallel imputation sequences.
+  * For efficiency reasons, starting values for b in the regression
+  * algorithm are taken from the previous Gibbs sampling iteration.
+  *
+  * The method consists of three steps:
+  * 1. Fit a logit or probit model, and find bhat and V(bhat)
+  * 2. Draw BETA from N(bhat, V(bhat))
+  * 3. Compute predicted scores for m.d., i.e. logit-1(X BETA)
+  * 4. Compare the score to a random (0,1) deviate, and impute.
+  *
+  * Parameter description
+  * INPUT   b       (q, m)        starting coefficients
+  *         y       (nobs, 1)     dependent variable
+  *         ry      (nobs, 1)     respons indicator for y
+  *         x       (nobs, q)     predictors
+  *         rx      (nobs, q)     respons indicator for x
+  *         f       (nmisx, m)    imputations for x
+  *         m       (1,1)         number of multiple imputations
+  *         model   (1,1)         imputation model (1=logit, 2=probit)
+  * OUTPUT  z       (n0, m)       imputations for y
+  *         b       (q, m)        regression weights
+  *
+  * Function returns:
+  *  0: OK
+  *  1: X'X is singular. No imputations will be generated.
+  *
+  * Author: Stef van Buuren, TNO Leiden.
+  *         Version 1 (May 26, 1993), SAS/IML V6.0.7
+  *-------------------------------------------------------------------*/
+start LOGIMP(z, b, y, ry, x, rx, f, m, model);
+    v = 0;
+    y = y[loc(ry),];                             /* observed response */
+    n1 = nrow(y);                             /* # valid observations */
+    n0 = nrow(ry) - n1;                     /* # missing observations */
+    q = ncol(x);
+    free z;
+    do i = 1 to m;
+        bhat = b[,i];               /* initialize from preceding iter */
+        bool = (rx = 0);
+        if any(bool) then x[loc(rx=0)] = f[,i]; /* augment predictors */
+        xo = x[loc(ry),];              /* take predictors with y(obs) */
+        if binest(bhat, v, y, xo, model) then return(1);       /* fit */
+        b[,i] = bhat;                               /* store estimate */
+        rv = t(root(v));                               /* draw beta's */
+        beta = bhat + rv * normal(j(q, 1, 0));
+        xm = x[loc(ry=0),];               /* compute predicted values */
+        if model = 1 then p = 1 / (1 + exp(-(xm * beta)));
+        if model = 2 then p = probnorm(xm * beta);
+        z = z || (uniform(j(n0, 1, 0)) <= p);
+    end;
+    return(0);
+finish LOGIMP;
+
+
+ /*-------------------------------------------------------------------*
+  * BINEST(b, v, y, x, model)
+  * Estimating binary response models: logistic and probit regression.
+  *
+  * Parameter description
+  * INPUT   b       (m, 1)        starting values for coefficients
+  *         y       (n, 1)        binary response variable
+  *         x       (n, m)        predictors
+  *         model   (1, 1)        1=logit, 2=probit
+  * OUTPUT  b       (m, 1)        estimated coefficients
+  *         v       (m, m)        var-cov matrix of estimates
+  *
+  * Function returns:
+  *  0: OK
+  *  1: Singularity in x. Estimates will be invalid.
+  *
+  * Adapted from the SAS/IML manual p. 135 by Stef van Buuren
+  *         Version 1 (May 26, 1993), SAS/IML V6.0.7
+  *-------------------------------------------------------------------*/
+start BINEST(b, v, y, x, model);
+    wgt = repeat(1, nrow(x), 1);                     /* count weights */
+    maxit = 1;                               /* max no. of iterations */
+    crit = 1e-5;                            /* convergence test value */
+    delta = 0.05;
+    oldb = b + 1;
+    do iter = 1 to maxit while(max(abs(b-oldb)) > crit);
+        oldb = b;
+        z = x * b;
+        if model = 1 then do;                      /* logit transform */
+            ez = exp(-z);
+            p = 1 / (1 + ez);
+            call truncate(p, delta, 1-delta);
+            f = p # p # ez;
+        end;
+        if model = 2 then do;                     /* probit transform */
+            p = probnorm(z);
+            call truncate(p, delta, 1-delta);
+            f = exp(-z # z / 2) / sqrt(8 * atan(1));
+        end;
+           *loglik =sum( ((y=1)#log(p) + (y=0)#log(1-p))#wgt);
+           *btransp = b`;
+           *print 'convergence values ' iter loglik btransp;
+        w = wgt / (p # (1 - p));
+        xx = f # x;
+        *print 'xx', xx;
+        *vv = xx` * (w # xx);
+        *wfep = w || f || ez || p;
+        *print 'w  f  ez  p', wfep;
+        *print 'xx` * (w # xx))', vv;
+        if invert(v, xx` * (w # xx)) then return(1);
+        v = (v` + v) / 2;                               /* symmetrize */
+        b = b + v * (xx` * (w # (y - p)));
+    end;
+    return(0);
+finish BINEST;
+
+
+ /*-------------------------------------------------------------------*
+  * TRUNCATE(x, min, max)
+  * Truncates the elements in x such that min <= x <= max.
+  *
+  * INPUT   x       (n, p)         data
+  *         min     (1, 1)         lower bound
+  *         max     (1, 1)         upper bound
+  * OUTPUT  x       (n, p)         truncated data
+  *-------------------------------------------------------------------*/
+start TRUNCATE(x, min, max);
+    x = choose(x>max, max, x);
+    x = choose(x<min, min, x);
+finish TRUNCATE;
+
+
+ /*-------------------------------------------------------------------*
+  * SUBIMP(x, r, imp, i)
+  * Substitutes the i'th multiple imputation into the incomplete
+  * data x. This results in a completed data set.
+  *
+  * INPUT   x       (nobs, nvar)   incomplete data
+  *         r       (nobs, nvar)   response indicator (0=mis, 1=obs)
+  *         imp     (nmiss, m+1)   imputation array
+  *         i       (1,1)          imputation index 1 <= i <= m
+  * OUTPUT  x       (nobs, nvar)   i'th version of the completed data
+  *
+  * Author: Stef van Buuren, TNO Leiden.
+  *         Version 3 (April 26, 1993), SAS/IML V6.0.7
+  *-------------------------------------------------------------------*/
+start SUBIMP(x, r, imp, i);
+    x[loc(r=0)] = imp[,i];
+finish SUBIMP;
+
+
+ /*-------------------------------------------------------------------*
+  * SAVIMP(imp, x, r, i)
+  * Saves the i'th multiple imputation into imp. Reverse of SUBIMP.
+  *
+  * INPUT   x       (nobs, nvar)   incomplete data
+  *         r       (nobs, nvar)   response indicator (0=mis, 1=obs)
+  *         i       (1,1)          imputation index 1 <= i <= m
+  * OUTPUT  imp     (nmiss, m+1)   i'th version of the completed data
+  *
+  * Author: Stef van Buuren, TNO Leiden.
+  *         Version 1 (April 29, 1993), SAS/IML V6.0.7
+  *-------------------------------------------------------------------*/
+start SAVIMP(imp, x, r, i);
+    imp[,i] = x[loc(r=0)];
+finish SAVIMP;
+
+
+
+
+
+
+
+
+ /*-------------------------------------------------------------------*
+  * BSPLINE(s, x, k, min, max)
+  * Constructs for variable x a linear B-spline basis with k knots.
+  * Knots are spaced uniformly.
+  *
+  * INPUT   x    (nobs, 1)      data variable
+  *         k    (1, 1)         number of knots (1 if continuous)
+  *         min  (1, 1)         left outer knot
+  *         max  (1, 1)         right outer knot
+  * OUTPUT  s    (nobs, k)      B-spline basis
+  *
+  * Author: Stef van Buuren, TNO Leiden.
+  *         Version 3 (April 29, 1993), SAS/IML V6.0.7
+  *-------------------------------------------------------------------*/
+start BSPLINE(s, x, k, min, max);
+    if k = 1 then do;
+        s = x;                                /* take original scores */
+        s = choose(s=., repeat(x[:,], nrow(x), 1), s);
+        return;
+    end;
+    d = (max - min) / (k-1);                /* uniform knot locations */
+    knot = do(min, max, d);
+    knot[k] = max + d/10000;               /* adjust right outer knot */
+    s = j(nrow(x), k, 0);
+    do q = 1 to k-1;                        /* make k basis functions */
+        bool = (x >= knot[q] & x < knot[q+1]);
+        if any(bool) then do;              /* define q'th column of b */
+            idx = loc(bool);
+            xs = x[idx,];
+            low = j(nrow(xs), 1, knot[q]);
+            up  = j(nrow(xs), 1, knot[q+1]);
+            dif = knot[q+1] - knot[q];
+            s[idx,q]   = (up - xs)  / dif;
+            s[idx,q+1] = (xs - low) / dif;
+        end;
+    end;
+finish BSPLINE;
+
+
+ /*-------------------------------------------------------------------*
+  * SPLINIT(t, c, s, si)
+  * One iteration of a one-dimensional SPLINALS algorithm.
+  *
+  * The module executes the following steps:
+  * 1. Make a auxilary variable z = stand(ave(Sj cj))
+  * 2. Compute new spline coefficients c
+  * 3. Compute transformed data matrix t
+  *
+  * INPUT   c    (sum(k), 1)    old spline coefficients
+  *         s    (nobs, sum(k)) spline basis
+  *         si   (1, sum(k))    indexes variables in s
+  * OUTPUT  t    (nobs, nvar)   matrix of transformed data
+  *         c    (sum(k), 1)    updated spline coefficients
+  *
+  * Calls: STAND
+  *
+  * Author: Stef van Buuren, TNO Leiden.
+  *         Version 1 (April 29, 1993), SAS/IML V6.0.7
+  *         Version 2 (May 27, 1993) adapted for continuous and binary
+  *-------------------------------------------------------------------*/
+start SPLINIT(t, c, s, si);
+    nvar = si[<>];
+    z = s * c / nvar;
+    call stand(z);
+    free c t;
+    do j = 1 to nvar;
+        sj = s[,loc(si=j)];                    /* spline basis var. j */
+        uni = (ncol(sj) = 1);                /* continuous and binary */
+        dj = t(sj) * sj;
+        zj = t(sj) * z;
+        if uni then do;                        /* if not spline coded */
+            cj = zj / dj;                           /* compute weight */
+            t = t || sj;                    /* keep original variable */
+        end;
+        else do;                                       /* for splines */
+            cj = solve(dj, zj);                  /* find coefficients */
+            tj = sj * cj;                                /* transform */
+            call stand(tj);                            /* standardize */
+            t = t || tj;                                 /* and store */
+        end;
+        c = c // cj;
+    end;
+finish SPLINIT;
+
+
+ /*-------------------------------------------------------------------*
+  * X2S(s, si, x, r)
+  * Completes the values in S by X(mis). Imputations are truncated
+  * to the range of observed values.
+  *
+  * INPUT   s    (nobs, nfun)   current basis functions
+  *         si   (1,nfun)       indexes variables in s
+  *         x    (nobs, nvar)   completed data matrix
+  *         r    (npbs, nvar)   response indicator
+  * OUTPUT  s    (nobs, nfun)   updated basis functions
+  *
+  * Calls: BSPLINE
+  *
+  * Author: Stef van Buuren, TNO Leiden.
+  *         Version 1 (April 29, 1993), SAS/IML V6.0.7
+  *         Version 2 (May 3, 1993), SAS/IML V6.0.7
+  *         Version 3 (May 28, 1993), SAS/IML V6.0.7
+  *-------------------------------------------------------------------*/
+start X2S(s, si, x, r);
+    do j = 1 to ncol(x);
+        rj = r[,j];
+        bool = (rj = 0);                   /* are there any missing ? */
+        if any(bool) then do;        /* if so, impute missings into s */
+            xm = x[loc(bool), j];                      /* imputations */
+            xo = x[loc(rj), j];                    /* observed scores */
+            min = xo[><,];
+            max = xo[<>,];
+            call truncate(xo, min, max);
+            k = sum(si=j);
+            call bspline(sm, xm, k, min, max);      /* find b-splines */
+            s[loc(bool), loc(si=j)] = sm;             /* update basis */
+        end;
+    end;
+finish X2S;
+
+
+/*-------------------------------------------------------------------*
+  * TRANSF(t, c, s, si, x, msplin)
+  * Transforms the columns of X towards approximate multivariate
+  * normality by linear B-splines.
+  *
+  * The module executes the following steps:
+  * 1. Code data x into basis functions s
+  * 2. Perform msplin SPLINALS iterations
+  * 3. Return the transformed data t.
+  *
+  * The input data x is assumed to be complete. The transformed
+  * data are given in standard scores.
+  *
+  * INPUT   c    (nfun,1)       current knot weights
+  *         s    (nobs, nfun)   current basis functions
+  *         si   (1, nfun)      indexes variables in s
+  *         x    (nobs, nvar)   complete data matrix
+  *         r    (nobs, nvar)   response indicator
+  *         msplin (1,1)        number of SPLINALS iterations
+  * OUTPUT  t    (nobs, nvar)   transformed data matrix
+  *         c    (nfun,1)       updated knot weights
+  *         s    (nobs, nfun)   updated basis functions
+  *
+  * Calls: X2S, SPLINIT
+  *
+  * Author: Stef van Buuren, TNO Leiden.
+  *         Version 1 (April 29, 1993), SAS/IML V6.0.7
+  *-------------------------------------------------------------------*/
+start TRANSF(t, c, s, si, x, r, msplin);
+    call x2s(s, si, x, r);                /* find new basis functions */
+    do i = 1 to msplin;
+        call splinit(t, c, s, si);             /* find transformation */
+    end;
+finish TRANSF;
+
+
+/*-------------------------------------------------------------------*
+  * UNTRANSF(impx, impt, x, t, r, si, delta)
+  * Transforms impt to impx by drawing from p(X(obs)|T(obs)),
+  * with impt substituted for T(obs).
+  *
+  * Method: The procedure collects all observation points, centered
+  * at the impt, with a bandwidth of 2*delta, and takes impx as a
+  * draw from this set.
+  *
+  * INPUT   impt (nmiss,m+1)    imputations (transf)
+  *         x    (nobs, nvar)   data matrix (untransf)
+  *         t    (nobs, nvar)   complete data matrix (transf)
+  *         r    (nobs, nvar)   response indicator
+  *         si   (1, nfun)      indexes variables in s
+  * OUTPUT  impx (nmiss,m+1)    imputations (untransf)
+  *
+  * Author: Stef van Buuren, TNO Leiden.
+  *         Version 2 (May 2, 1993), SAS/IML V6.0.7
+  *         Version 3 (May 27, 1993) continuous and binary added
+  *-------------------------------------------------------------------*/
+start UNTRANSF(impx, impt, x, t, r, si, delta);
+    m = ncol(impt) - 1;
+    do j = 1 to ncol(x);                             /* variable loop */
+        nval = sum(r[,j]);
+        nmis = nrow(x) - nval;
+        if nmis > 0 then do;
+            if (sum(si=j)=1) then do;     /* if not transformed, copy */
+                impx[loc(j=impx[,m+1]),] = impt[loc(j=impx[,m+1]),];
+            end;
+            else do;
+                nm = nmis # m;
+                idx = loc(r[,j]);
+                xjobs = x[idx, j];          /* observed untransformed */
+                to = t[idx, j];               /* observed transformed */
+                im = impt[loc(j=impt[,m+1]),1:m];            /*imp */
+                imp = j(nmis, m);
+                do ii = 1 to nrow(im);
+                    do jj = 1 to ncol(im);
+                        imi = im[ii, jj];
+                        f = nval;
+                        do until(nini>0);
+                            low = imi - f # d; /* find obs in range */
+                            up  = imi + f # d;
+                            bool = (low <= to & to <= up);
+                            nin = bool[+,];
+                            f = 2 # f;
+                        end;
+                        draw = ceil(nin # uniform(j(1, nm, 0)));
+                        imp[ii,jj] = xjobs[loc(bool)[draw],];
+                    end;
+                end;
+                imp = j(1, nm, 0);
+                do i = 1 to nm;                    /* draw from xjobs */
+                    imp[,i] = xjobs[loc(bool[,i])[draws[,i]],];
+                end;
+                impx[loc(j=impx[,m+1]), 1:m] = shape(imp, nmis, m);
+            end;
+        end;
+    end;
+finish UNTRANSF;
+
+
+/*-------------------------------------------------------------------*
+  * INIT(impx, impt, t, c, s, si, x, r, k, m, type, delta)
+  * Initializes arrays for the TRIM program.
+  *
+  * INPUT   x    (nobs, nvar)   data matrix (untransformed)
+  *         r    (nobs, nvar)   response indicator
+  *         k    (1, nvar)      number of knots (>= 1) per variable
+  *         m    (1,1)          number of multiple imputations
+  *         type (1, nvar)      1=continuous, 2=binary
+  *         delta(1,1)          transformation bandwidth
+  * OUTPUT  impx (nmiss,m+1)    initial imputations (untransformed)
+  *         impt (nmiss,m+1)    initial imputations (transformed)
+  *         b    (ntpred,m+1)   initial regression coeff.
+  *         t    (nobs, nvar)   data matrix (transformed)
+  *         c    (nfun,1)       initial knot weights
+  *         s    (nobs, nfun)   initial basis functions
+  *         si   (1, nfun)      indexes variables in s
+  *
+  * Author: Stef van Buuren, TNO Leiden.
+  *         Version 2 (May 3, 1993), SAS/IML V6.0.7
+  *         Version 3 (May 27, 1993) b added
+  *-------------------------------------------------------------------*/
+start INIT(impx, impt, b, t, c, s, si, x, r, k, m, type, delta);
+    nobs = nrow(x);
+    nvar = ncol(x);
+    nval = sum(r);
+    nmis = nobs * nvar - nval;
+
+    impt = normal(j(nmis, m, 0));                             /* impt */
+    tmp = (j(nobs, nvar, 1) - r) # (1:nvar);
+    impt = impt || tmp[loc(tmp)];
+
+    impx = impt;                                              /* impx */
+    mean = x[:,];
+    std  = sqrt((x - repeat(mean, nobs, 1))[##,]/r[+,]);
+    do j = 1 to nvar;
+        bool = (j=impx[,m+1]);
+        if any(bool) then do;
+            mj = repeat(mean[,j], sum(bool), m);
+            sj = repeat(std[,j], sum(bool), m);
+            impx[loc(bool), 1:m] = mj + sj # impx[loc(bool), 1:m];
+        end;
+    end;
+
+    b = 0;                                                       /* b */
+    nbin = sum(type = 2);
+    if nbin > 0 then do;
+        b = uniform(j(nbin#(nvar-1), m, 0)) / 100;
+        tmp = repeat((type=2), nvar-1, 1) # (1:nvar);
+        b = b || tmp[loc(tmp)];           /* append identifier column */
+    end;
+
+    t = j(nobs, nvar, 0);                                        /* t */
+
+    free s si;
+    do j = 1 to nvar;                                        /* s, si */
+        xj = x[,j];
+        min = xj[><,];
+        max = xj[<>,];
+        kj = k[,j];
+        call bspline(sj, xj, kj, min, max);
+        s = s || sj;
+        si = si || j(1, kj, j);
+    end;
+
+    free c;                                                      /* c */
+    z = x[,:];
+    call stand(z);
+    do j = 1 to nvar;
+        sj = s[,loc(si=j)];                    /* spline basis var. j */
+        dj = t(sj) * sj;
+        zj = t(sj) * z;
+        cj = solve(dj, zj);                    /* spline coefficients */
+        c = c // cj;
+    end;
+finish INIT;
+
+
+ /*-------------------------------------------------------------------*
+  * TRIM(impx, means, x, r, k, m, maxit, type, meth, model)
+  * Transformation-imputation algorithm for generating imputations
+  * under the multivariate normal model with automatic data
+  * transformations towards multivariate normality using splines.
+  *
+  * INPUT   x       (nobs, nvar)   original data matrix
+  *         r       (nobs, nvar)   response indicator (0=mis, 1=obs)
+  *         k       (1, nvar)      number of knots (>= 1) per variable
+  *         m       (1,1)          number of multiple imputations
+  *         maxit   (1,1)          maximum no. of main iterations
+  *         type    (1, nvar)      1=continuous, 2=binary
+  *         meth    (1,1)          imputation method
+  *         model   (1,1)          1=logit, 2=probit (if type=2)
+  * OUTPUT  impx    (nmis, m)      imputation array
+  *         means   (maxit, m#nvar)variable means per iteration
+  *
+  * Calls: INIT, TRANSF, GIBBSIT, UNTRANSF
+  *        SUBIMP, SAVIMP
+  *
+  * Author: Stef van Buuren, TNO Leiden.
+  *         Version 1 (April 29, 1993), SAS/IML V6.0.7
+  *         Version 2 (May 26, 1993), SAS/IML V6.0.7
+  *-------------------------------------------------------------------*/
+start TRIM(impx, means, x, r, k, m, maxit, type, meth, model);
+    msplin = 1;                        /* # inner SPLINALS iterations */
+    mgibbs = 1;                           /* # inner Gibbs iterations */
+    delta = 0.2;                  /* inverse transformation bandwidth */
+    impx = 0; impt = 0; t = 0; c = 0; s = 0; si = 0;
+    call init(impx, impt, b, t, c, s, si, x, r, k, m, type, delta);
+
+    means = j(maxit, m # ncol(x));
+    do it = 1 to maxit;                        /* main iteration loop */
+      * print 'Iteration' it;
+        if msplin > 0 then do;
+            free tm;
+            do i = 1 to m;                           /* tranform data */
+                xx = x;
+                call subimp(xx, r, impx, i);
+                tm = tm || xx[:,];            /* store variable means */
+                call transf(t, c, s, si, xx, r, msplin);
+                call savimp(impt, t, r, i);
+            end;
+            means[it,] = tm;
+        end;
+        do ig = 1 to mgibbs;           /* impute by the Gibbs sampler */
+            err = gibbsit(impt, b, t, r, m, type, meth, model);
+            if err^=0 then do;
+                print 'Error found: ', err;
+                stop;
+            end;
+        end;
+        call untransf(impx, impt, x, t, r, si, delta);
+    end;
+
+finish TRIM;
+
+/* STORE PROGRAM IN SASUSER.TRIM */
+reset storage=trim;
+store module=_ALL_;
+quit;

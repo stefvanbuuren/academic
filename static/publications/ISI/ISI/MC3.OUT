@@ -1,0 +1,786 @@
+802
+/*-------------------------------------------------------------------*
+803    * MC3 SAS    Monte Carlo study for TRIM program
+*
+804
+*-------------------------------------------------------------------*
+805    *  Author:  Stef van Buuren, TNO Leiden <BUUREN@NIPG.TNO.NL>
+*
+806    * Created:  Aug 18, 1993
+*
+807    * Revised:  Sept 20, 1993
+*
+808    * Version:  0.3
+*
+809    *    Code:  SAS/IML 6.07
+*
+810    *     See:  1 van Buuren, S., van Rijckevorsel, J.L.A. &
+*
+811    *             Rubin, D.B. (1993). "Multiple imputation by splines"
+*
+812    *             Submitted to ISI 1993 Meeting in Florence
+*
+813
+*-------------------------------------------------------------------*/
+814
+815  proc iml;
+IML Ready
+816      reset log noprint fw=5 linesize=85 nocenter;
+817      reset storage = trim;
+NOTE: New storage = SASUSER.TRIM
+818      load module=_all_;
+819
+820
+821  /* POLY
+822   * Polynomial regression
+823   * IN: y, x1 (n x 1), p (>0, number of polynomial terms)
+824   * OUT: b (1 x p) sd (1 x p)
+825   */
+826  start poly(b, covb, y, x1, p);
+827      x = repeat(x1, 1, p);
+828      pow = repeat((1:p), nrow(x), 1);
+829      x = x ## pow;
+830      xpx = t(x) * x;
+831      xpy = t(x) * y;
+832      xpxi = inv(xpx);
+833      b = xpxi * xpy;
+834      yhat = x * b;
+835      resid = y - yhat;
+836      sse = t(resid) * resid;
+837      dfe = nrow(y) - p;
+838      mse = sse / dfe;
+839      covb = xpxi # mse;
+840      b = t(b);
+841  finish poly;
+NOTE: Module POLY defined.
+842
+843  start main;
+844      errcode = {" if errors >= 0 then do;",
+845                 "    errors = errors + 1;",
+846                 "    if errors > 100 then abort;",
+847                 "    else do; call push(errcode); resume; end;",
+848                 " end;" };
+849      call push(errcode);
+850      errors = 0;
+851
+852      /* Simulation parameters */
+853      s = 100;
+854      n = 300;
+855      q0 = {1 2};
+856      beta0 = {1 3};
+857      sigma0 = {0.5 0.01};
+857                           *sigma0 = {3 1 0.5 0.01};
+858      p0 = {0.1 0.2 0.3};
+859      m = 5;
+860      maxit = 20;
+861      k = 2;
+861             /* n of parameters */
+862
+863      template = j(1, 18, 0);
+864      create results from template;
+865      do bi = 1 to ncol(beta0);
+866        beta = beta0[bi];
+867        do si = 1 to ncol(sigma0);
+868          sigma = sigma0[si];
+869          do pi = 1 to ncol(p0);
+870            p = p0[pi];
+871            do qi = 1 to ncol(q0);
+872              q = q0[qi];
+873              a_hits = j(1, ncol(q0), 0);
+874              b_hits = j(1, ncol(q0), 0);
+875              c_hits = j(1, ncol(q0), 0);
+876              hits = j(1, ncol(q0), 0);
+877              c_beta0 = c_hits;
+878              c_beta0[q] = beta;
+879              do r = 1 to s;
+880                free result;
+881                result = result || bi || si || pi || qi || r;
+882
+883                /* Generate data */
+884                x = normal(j(n, 1, 0));
+885                e = normal(j(n, 1, 0)) # sigma;
+886                y = beta # x ## q + e;
+887
+888                /* Complete data analysis for control */
+889                call poly(b, covb, y, x, ncol(q0));
+890                sd = t(sqrt(vecdiag(covb)));
+891                low = b - 1.96 # sd;
+892                up  = b + 1.96 # sd;
+893                hit = (low <= c_beta0 & c_beta0 <= up);
+894                c_hits = c_hits + hit;
+895                *print b;
+896                *print covb;
+897                *  print low up;
+898                result = result || b || low || up;
+899
+900                /* Make p percent missing data (MCAR) */
+901                id1 = uniform(j(n, 1, 0)) < p;
+902                id2 = floor(1 + 2 # uniform(j(n, 1, 0)));
+903                data = y || x;
+904                do ii = 1 to n;
+905                  if id1[ii,] = 1 then data[ii, id2[ii,]] = .;
+906                end;
+907                r_in = choose(data = ., 0, 1);
+908                nval = sum(r_in);
+909                nmis = nrow(data) * ncol(data) - nval;
+910                *print nmis;
+911                *datar = data || r_in || id1 || id2;
+912                *print datar;
+913
+914                /* Multiply impute the data */
+915                do anal = 1 to 2;
+916                  if anal = 1 then knots = {1 1};
+916                                                  /* Rubin-Schafer */
+917                  if anal = 2 then knots = {1 3};
+917                                                  /* spline        */
+918                  type  = {1 1};
+919                  impx = j(nmis, m, 0);
+920                  model = 1;
+921                  meth = 1;
+922                  mns = 0;
+923                  call trim(impx, mns, data, r_in, knots, m, maxit,
+924                            type, meth, model);
+925
+926                  /* Do m complete-data analysis */
+927                  qdak = j(m, 2, 0);
+928                  free u;
+929                  do i = 1 to m;
+930                      call subimp(data, r_in, impx, i);
+931                      call poly(b, covb, data[,1], data[,2], ncol(q0));
+932                      qdak[i,] = b;
+933                      u = u // covb;
+934                  end;
+935                 * print anal;
+936                 * print qdak;
+937                 * print u;
+938
+939                  /* Pool parameters */
+940                  qbar = qdak[:,];
+941                  ubar = (u[1:2,]+u[3:4,]+u[5:6,]+u[7:8,]+u[9:10,]) / m;
+942                  *print 'Average covariance matrix Ubar',  ubar;
+943                  d = qdak - repeat(qbar, m, 1);
+944                  b = j(k, k, 0);
+945                  do l = 1 to m;
+946                    b = b + t(d[l,]) * d[l,];
+947                  end;
+948                  b = b / (m-1);
+949                  *print 'Between imputation covariance matrix', b;
+950                  t = ubar + (1 + 1/m) # b;
+951                  *print 'Total covariance matrix', t;
+952
+953
+954                  /* Compute MI 95% CI */
+955                  b = t(vecdiag(b));
+956                  ubar = t(vecdiag(ubar));
+957                  se = t(sqrt(vecdiag(t)));
+958                  low = qbar - 1.96 # se;
+959                  up  = qbar + 1.96 # se;
+960                  *print low up;
+961
+962                  /* Compute coverages */
+963                  hit = (low <= c_beta0 & c_beta0 <= up);
+964                  if anal = 1 then a_hits = a_hits + hit;
+965                  if anal = 2 then b_hits = b_hits + hit;
+966                  resx = result || anal || b || low || up;
+967                  *print resx;
+968                  append from resx;
+969                end;
+970
+971              end;
+972              print p q sigma c_beta0 a_hits b_hits c_hits;
+973              save;
+974            end;
+975          end;
+976        end;
+977      end;
+978  finish main;
+NOTE: Module MAIN defined.
+979
+980  call main;
+Exiting IML.
+1203 workspace compresses.
+NOTE: PROCEDURE IML used:
+      real time           1:07.445
+      cpu time            30.550 seconds
+
+
+1     if errors >= 0 then do;
+      --
+      180
+
+ERROR 180-322: Statement is not valid or it is used out of proper order.
+
+1                                                     errors = errors + 1;
+                                                      ------
+                                                      180
+
+ERROR 180-322: Statement is not valid or it is used out of proper order.
+
+1
+              if errors > 100 then abort;
+
+--
+
+180
+
+ERROR 180-322: Statement is not valid or it is used out of proper order.
+
+1
+                  else do;
+
+----
+
+180
+
+ERROR 180-322: Statement is not valid or it is used out of proper order.
+
+1
+ call push(errcode);
+
+----
+
+180
+
+ERROR 180-322: Statement is not valid or it is used out of proper order.
+
+1
+ resume;
+
+------
+
+180
+
+ERROR 180-322: Statement is not valid or it is used out of proper order.
+
+1
+ end;
+
+---
+
+180
+
+ERROR 180-322: Statement is not valid or it is used out of proper order.
+
+1
+ end;
+
+---
+
+180
+
+ERROR 180-322: Statement is not valid or it is used out of proper order.
+
+2    ; P_U_S_H_E_N_D;
+       -------------
+       180
+
+ERROR 180-322: Statement is not valid or it is used out of proper order.
+
+981  errors = -1;
+     ------
+     180
+
+ERROR 180-322: Statement is not valid or it is used out of proper order.
+
+982
+983  quit;
+984  run;
+985  close results;
+     -----
+     180
+
+ERROR 180-322: Statement is not valid or it is used out of proper order.
+
+986   /*-------------------------------------------------------------------*
+987    * MC3 SAS    Monte Carlo study for TRIM program                     *
+988    *-------------------------------------------------------------------*
+989    *  Author:  Stef van Buuren, TNO Leiden <BUUREN@NIPG.TNO.NL>        *
+990    * Created:  Aug 18, 1993                                            *
+991    * Revised:  Sept 20, 1993                                           *
+992    * Version:  0.3                                                     *
+993    *    Code:  SAS/IML 6.07                                            *
+994    *     See:  1 van Buuren, S., van Rijckevorsel, J.L.A. &            *
+995    *             Rubin, D.B. (1993). "Multiple imputation by splines"  *
+996    *             Submitted to ISI 1993 Meeting in Florence             *
+997    *-------------------------------------------------------------------*/
+998
+999  proc iml;
+IML Ready
+1000      reset log noprint fw=5 linesize=85 nocenter;
+1001      reset storage = trim;
+NOTE: New storage = SASUSER.TRIM
+1002      load module=_all_;
+1003
+1004
+1005  /* POLY
+1006   * Polynomial regression
+1007   * IN: y, x1 (n x 1), p (>0, number of polynomial terms)
+1008   * OUT: b (1 x p) sd (1 x p)
+1009   */
+1010  start poly(b, covb, y, x1, p);
+1011      x = repeat(x1, 1, p);
+1012      pow = repeat((1:p), nrow(x), 1);
+1013      x = x ## pow;
+1014      xpx = t(x) * x;
+1015      xpy = t(x) * y;
+1016      xpxi = inv(xpx);
+1017      b = xpxi * xpy;
+1018      yhat = x * b;
+1019      resid = y - yhat;
+1020      sse = t(resid) * resid;
+1021      dfe = nrow(y) - p;
+1022      mse = sse / dfe;
+1023      covb = xpxi # mse;
+1024      b = t(b);
+1025  finish poly;
+NOTE: Module POLY defined.
+1026
+1027  start main;
+1028      errcode = {" if errors >= 0 then do;",
+1029                 "    errors = errors + 1;",
+1030                 "    if errors > 100 then abort;",
+1031                 "    else do; call push(errcode); resume; end;",
+1032                 " end;" };
+1033      call push(errcode);
+1034      errors = 0;
+1035
+1036      /* Simulation parameters */
+1037      s = 100;
+1038      n = 300;
+1039      q0 = {1 2};
+1040      beta0 = {1 3};
+1041      sigma0 = {3 1 0.5 0.01};
+1042      p0 = {0.1 0.2 0.3};
+1043      m = 5;
+1044      maxit = 20;
+1045      k = 2;
+1045             /* n of parameters */
+1046
+1047      template = j(1, 18, 0);
+1048      create results from template;
+1049      do bi = 1 to ncol(beta0);
+1050        beta = beta0[bi];
+1051        do si = 1 to ncol(sigma0);
+1052          sigma = sigma0[si];
+1053          do pi = 1 to ncol(p0);
+1054            p = p0[pi];
+1055            do qi = 1 to ncol(q0);
+1056              q = q0[qi];
+1057              a_hits = j(1, ncol(q0), 0);
+1058              b_hits = j(1, ncol(q0), 0);
+1059              c_hits = j(1, ncol(q0), 0);
+1060              hits = j(1, ncol(q0), 0);
+1061              c_beta0 = c_hits;
+1062              c_beta0[q] = beta;
+1063              do r = 1 to s;
+1064                free result;
+1065                result = result || bi || si || pi || qi || r;
+1066
+1067                /* Generate data */
+1068                x = normal(j(n, 1, 0));
+1069                e = normal(j(n, 1, 0)) # sigma;
+1070                y = beta # x ## q + e;
+1071
+1072                /* Complete data analysis for control */
+1073                call poly(b, covb, y, x, ncol(q0));
+1074                sd = t(sqrt(vecdiag(covb)));
+1075                low = b - 1.96 # sd;
+1076                up  = b + 1.96 # sd;
+1077                hit = (low <= c_beta0 & c_beta0 <= up);
+1078                c_hits = c_hits + hit;
+1079                *print b;
+1080                *print covb;
+1081                *  print low up;
+1082                result = result || b || low || up;
+1083
+1084                /* Make p percent missing data (MCAR) */
+1085                id1 = uniform(j(n, 1, 0)) < p;
+1086                id2 = floor(1 + 2 # uniform(j(n, 1, 0)));
+1087                data = y || x;
+1088                do ii = 1 to n;
+1089                  if id1[ii,] = 1 then data[ii, id2[ii,]] = .;
+1090                end;
+1091                r_in = choose(data = ., 0, 1);
+1092                nval = sum(r_in);
+1093                nmis = nrow(data) * ncol(data) - nval;
+1094                *print nmis;
+1095                *datar = data || r_in || id1 || id2;
+1096                *print datar;
+1097
+1098                /* Multiply impute the data */
+1099                do anal = 1 to 2;
+1100                  if anal = 1 then knots = {1 1};
+1100                                                  /* Rubin-Schafer */
+1101                  if anal = 2 then knots = {1 3};
+1101                                                  /* spline        */
+1102                  type  = {1 1};
+1103                  impx = j(nmis, m, 0);
+1104                  model = 1;
+1105                  meth = 1;
+1106                  mns = 0;
+1107                  call trim(impx, mns, data, r_in, knots, m, maxit,
+1108                            type, meth, model);
+1109
+1110                  /* Do m complete-data analysis */
+1111                  qdak = j(m, 2, 0);
+1112                  free u;
+1113                  do i = 1 to m;
+1114                      call subimp(data, r_in, impx, i);
+1115                      call poly(b, covb, data[,1], data[,2], ncol(q0));
+1116                      qdak[i,] = b;
+1117                      u = u // covb;
+1118                  end;
+1119                 * print anal;
+1120                 * print qdak;
+1121                 * print u;
+1122
+1123                  /* Pool parameters */
+1124                  qbar = qdak[:,];
+1125                  ubar = (u[1:2,]+u[3:4,]+u[5:6,]+u[7:8,]+u[9:10,]) / m;
+1126                  *print 'Average covariance matrix Ubar',  ubar;
+1127                  d = qdak - repeat(qbar, m, 1);
+1128                  b = j(k, k, 0);
+1129                  do l = 1 to m;
+1130                    b = b + t(d[l,]) * d[l,];
+1131                  end;
+1132                  b = b / (m-1);
+1133                  *print 'Between imputation covariance matrix', b;
+1134                  t = ubar + (1 + 1/m) # b;
+1135                  *print 'Total covariance matrix', t;
+1136
+1137
+1138                  /* Compute MI 95% CI */
+1139                  b = t(vecdiag(b));
+1140                  ubar = t(vecdiag(ubar));
+1141                  se = t(sqrt(vecdiag(t)));
+1142                  low = qbar - 1.96 # se;
+1143                  up  = qbar + 1.96 # se;
+1144                  *print low up;
+1145
+1146                  /* Compute coverages */
+1147                  hit = (low <= c_beta0 & c_beta0 <= up);
+1148                  if anal = 1 then a_hits = a_hits + hit;
+1149                  if anal = 2 then b_hits = b_hits + hit;
+1150                  resx = result || anal || b || low || up;
+1151                  *print resx;
+1152                  append from resx;
+1153                end;
+1154
+1155              end;
+1156              print p q sigma c_beta0 a_hits b_hits c_hits;
+1157              save;
+1158            end;
+1159          end;
+1160        end;
+1161      end;
+1162  finish main;
+NOTE: Module MAIN defined.
+1163
+1164  call main;
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.1     1     3     1     0    94    99    91    98    92    98
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.1     2     3     0     1    96    89    97    90    96    93
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.2     1     3     1     0    94    99    93    98    93    98
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.2     2     3     0     1    88    75    92    94    95    95
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.3     1     3     1     0    95   100    95    97    95    96
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.3     2     3     0     1    96    51    93    88    95    98
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.1     1     1     1     0    97    93    97    92    95    93
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.1     2     1     0     1    94    65    93    82    97    92
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.2     1     1     1     0    95    97    96    96    94    97
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.2     2     1     0     1    90    31    91    60    91    96
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.3     1     1     1     0    96    99    93    93    97    95
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.3     2     1     0     1    86    10    86    33    97    99
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.1     1   0.5     1     0    97    98    97    94    96    96
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.1     2   0.5     0     1    95    56    98    75    94    95
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.2     1   0.5     1     0    94    96    94    95    95    97
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.2     2   0.5     0     1    93    27    91    34    94    95
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.3     1   0.5     1     0    98    98    97    94    98    97
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.3     2   0.5     0     1    91     9    85    12    97    95
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.1     1  0.01     1     0    96    97    98    81    95    94
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.1     2  0.01     0     1    97    57    98    63    98    98
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.2     1  0.01     1     0    99   100    99    49    96    97
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.2     2  0.01     0     1    93    14    86    18    93    96
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.3     1  0.01     1     0    92    99   100    55    95    94
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.3     2  0.01     0     1    88     5    76     3    94    96
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.1     1     3     3     0    92    97    91    95    93    95
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.1     2     3     0     3    95    64    97    83    95    92
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.2     1     3     3     0    94    98    93    94    93    98
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.2     2     3     0     3    92    36    84    60    97    97
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.3     1     3     3     0    98    96    98    94    97    96
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.3     2     3     0     3    92    13    85    45    96    95
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.1     1     1     3     0    94    97    96    95    94    95
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.1     2     1     0     3    96    68    95    72    91    97
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.2     1     1     3     0    96    97    97    95    96    95
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.2     2     1     0     3    89    17    93    36    96    96
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.3     1     1     3     0    92    98    87    90    91    96
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.3     2     1     0     3    88     7    89     7    95    93
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.1     1   0.5     3     0    97    92    95    87    96    91
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.1     2   0.5     0     3    94    51    96    65    94    93
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.2     1   0.5     3     0    91    98    95    92    93    91
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.2     2   0.5     0     3    91    17    87    24    97    97
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.3     1   0.5     3     0    98    96    98    87    95    91
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.3     2   0.5     0     3    94     5    83     6    95    96
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.1     1  0.01     3     0    92    98   100    89    95    97
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.1     2  0.01     0     3    96    70    95    69    94    94
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.2     1  0.01     3     0    91    99    97    53    95    95
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.2     2  0.01     0     3    90    16    92    17    95    95
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.3     1  0.01     3     0    92   100    98    50    94    95
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.3     2  0.01     0     3    88     5    75     8    96    94
+
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+ERROR: RESUME illegal; no pauses pending.
+Exiting IML.
+NOTE: The data set WORK.RESULTS has 9600 observations and 18 variables.
+NOTE: PROCEDURE IML used:
+      real time           109:27:06.907
+      cpu time            50:19:01.280
+
+
+1165  errors = -1;
+      ------
+      180
+
+ERROR 180-322: Statement is not valid or it is used out of proper order.
+
+1166
+1167  quit;

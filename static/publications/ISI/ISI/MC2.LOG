@@ -1,0 +1,414 @@
+NOTE: Copyright(c) 1989 by SAS Institute Inc., Cary, NC USA.
+NOTE: SAS (r) Proprietary Software Release 6.07.02
+      Licensed to NIPG - TNO-LEIDEN, Site 0080374001.
+
+
+
+
+      Dit is het SAS nieuws.
+      Dit wordt bij het opstarten getoond.
+
+
+NOTE: AUTOEXEC processing beginning; file is /users/buuren/autoexec.sas.
+
+NOTE: SAS initialization used:
+      real time           11.886 seconds
+      cpu time            1.130 seconds
+
+NOTE: Libref LIB1 was successfully assigned as follows:
+      Engine:        V607
+      Physical Name: /disk2/sas/data
+NOTE: Libref GDEVICE0 was successfully assigned as follows:
+      Engine:        V607
+      Physical Name: /disk2/sas/devices
+NOTE: Library GLIB does not exist.
+
+NOTE: AUTOEXEC processing completed.
+
+1
+/*-------------------------------------------------------------------*
+2      * MC2 SAS    Monte Carlo study for ISI conference
+*
+3
+*-------------------------------------------------------------------*
+4      *  Author:  Stef van Buuren, TNO Leiden <BUUREN@NIPG.TNO.NL>
+*
+5      * Created:  Aug 18, 1993
+*
+6      * Revised:  Aug 20, 1993
+*
+7      * Version:  0.2
+*
+8      *    Code:  SAS/IML 6.07
+*
+9      *     See:  1 van Buuren, S., van Rijckevorsel, J.L.A. &
+*
+10     *             Rubin, D.B. (1993). "Multiple imputation by splines"
+*
+11     *             Submitted to ISI 1993 Meeting in Florence
+*
+12
+*-------------------------------------------------------------------*/
+13
+14   proc iml;
+IML Ready
+15       reset log noprint fw=5 linesize=85 nocenter;
+16       reset storage = trim;
+NOTE: New storage = SASUSER.TRIM
+17       load module=_all_;
+18
+19
+20   /* POLY
+21    * Polynomial regression
+22    * IN: y, x1 (n x 1), p (>0, number of polynomial terms)
+23    * OUT: b (1 x p) sd (1 x p)
+24    */
+25   start poly(b, covb, y, x1, p);
+26       x = repeat(x1, 1, p);
+27       pow = repeat((1:p), nrow(x), 1);
+28       x = x ## pow;
+29       xpx = t(x) * x;
+30       xpy = t(x) * y;
+31       xpxi = inv(xpx);
+32       b = xpxi * xpy;
+33       yhat = x * b;
+34       resid = y - yhat;
+35       sse = t(resid) * resid;
+36       dfe = nrow(y) - p;
+37       mse = sse / dfe;
+38       covb = xpxi # mse;
+39       b = t(b);
+40   finish poly;
+NOTE: Module POLY defined.
+41
+42
+43       /* Simulation parameters */
+44       s = 10;
+45       n = 300;
+46       q0 = {1 2};
+47       beta0 = {1 3};
+48       sigma0 = {3 1 0.5 0.01};
+49       p0 = {0.1 0.2 0.3};
+50       m = 5;
+51       maxit = 20;
+52       k = 2;
+52              /* n of parameters */
+53
+54       do bi = 1 to ncol(beta0);
+55         beta = beta0[bi];
+56         do si = 1 to ncol(sigma0);
+57           sigma = sigma0[si];
+58           do pi = 1 to ncol(p0);
+59             p = p0[pi];
+60             do qi = 1 to ncol(q0);
+61               q = q0[qi];
+62               a_hits = j(1, ncol(q0), 0);
+63               b_hits = j(1, ncol(q0), 0);
+64               c_hits = j(1, ncol(q0), 0);
+65               hits = j(1, ncol(q0), 0);
+66               c_beta0 = c_hits;
+67               c_beta0[q] = beta;
+68               do r = 1 to s;
+69
+70                 /* Generate data */
+71                 x = normal(j(n, 1, 0));
+72                 e = normal(j(n, 1, 0)) # sigma;
+73                 y = beta # x ## q + e;
+74
+75                 /* Complete data analysis for control */
+76                 call poly(b, covb, y, x, ncol(q0));
+77                 sd = t(sqrt(vecdiag(covb)));
+78                 low = b - 1.96 # sd;
+79                 up  = b + 1.96 # sd;
+80                 hit = (low <= c_beta0 & c_beta0 <= up);
+81                 c_hits = c_hits + hit;
+82                 *print b;
+83                 *print covb;
+84                 *  print low up;
+85
+86                 /* Make p percent missing data (MCAR) */
+87                 id1 = uniform(j(n, 1, 0)) < p;
+88                 id2 = floor(1 + 2 # uniform(j(n, 1, 0)));
+89                 data = y || x;
+90                 do ii = 1 to n;
+91                   if id1[ii,] = 1 then data[ii, id2[ii,]] = .;
+92                 end;
+93                 r_in = choose(data = ., 0, 1);
+94                 nval = sum(r_in);
+95                 nmis = nrow(data) * ncol(data) - nval;
+96                 *print nmis;
+97                 *datar = data || r_in || id1 || id2;
+98                 *print datar;
+99
+100                /* Multiply impute the data */
+101                do anal = 1 to 2;
+102                  if anal = 1 then knots = {1 1};
+102                                                  /* Rubin-Schafer */
+103                  if anal = 2 then knots = {1 3};
+103                                                  /* spline        */
+104                  type  = {1 1};
+105                  impx = j(nmis, m, 0);
+106                  model = 1;
+107                  meth = 1;
+108                  mns = 0;
+109                  call trim(impx, mns, data, r_in, knots, m, maxit,
+110                            type, meth, model);
+111
+112                  /* Do m complete-data analysis */
+113                  qdak = j(m, 2, 0);
+114                  free u;
+115                  do i = 1 to m;
+116                      call subimp(data, r_in, impx, i);
+117                      call poly(b, covb, data[,1], data[,2], ncol(q0));
+118                      qdak[i,] = b;
+119                      u = u // covb;
+120                  end;
+121                 * print anal;
+122                 * print qdak;
+123                 * print u;
+124
+125                  /* Pool parameters */
+126                  qbar = qdak[:,];
+127                  ubar = (u[1:2,]+u[3:4,]+u[5:6,]+u[7:8,]+u[9:10,]) / m;
+128                  *print 'Average covariance matrix Ubar',  ubar;
+129                  d = qdak - repeat(qbar, m, 1);
+130                  b = j(k, k, 0);
+131                  do l = 1 to m;
+132                    b = b + t(d[l,]) * d[l,];
+133                  end;
+134                  b = b / (m-1);
+135                  *print 'Between imputation covariance matrix', b;
+136                  t = ubar + (1 + 1/m) # b;
+137                  *print 'Total covariance matrix', t;
+138
+139
+140                  /* Compute MI 95% CI */
+141                  b = t(vecdiag(b));
+142                  ubar = t(vecdiag(ubar));
+143                  se = t(sqrt(vecdiag(t)));
+144                  low = qbar - 1.96 # se;
+145                  up  = qbar + 1.96 # se;
+146                  *print low up;
+147
+148                  /* Compute coverages */
+149                  hit = (low <= c_beta0 & c_beta0 <= up);
+150                  if anal = 1 then a_hits = a_hits + hit;
+151                  if anal = 2 then b_hits = b_hits + hit;
+152                end;
+153
+154              end;
+155              print p q sigma c_beta0 a_hits b_hits c_hits;
+156            end;
+157          end;
+158        end;
+159      end;
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.1     1     3     1     0    10    10     9    10     8    10
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.1     2     3     0     1     9     8     9    10     9    10
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.2     1     3     1     0    10    10     9    10     9    10
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.2     2     3     0     1    10     5    10     8    10     8
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.3     1     3     1     0     9    10    10    10    10    10
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.3     2     3     0     1     9     7     9     9    10    10
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.1     1     1     1     0    10     8    10     8    10     8
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.1     2     1     0     1    10     7    10    10    10     9
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.2     1     1     1     0     9     9     9     9     9     9
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.2     2     1     0     1     9     2     9     5     9     9
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.3     1     1     1     0    10    10    10    10     9    10
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.3     2     1     0     1    10     0    10     3    10    10
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.1     1   0.5     1     0    10     9    10     9    10     7
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.1     2   0.5     0     1     9     7     9     9    10     9
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.2     1   0.5     1     0     9    10     9    10     9     9
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.2     2   0.5     0     1     8     0     8     3    10    10
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.3     1   0.5     1     0     9    10     9    10    10    10
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.3     2   0.5     0     1     7     0    10     0     9    10
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.1     1  0.01     1     0     9    10    10    10     9    10
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.1     2  0.01     0     1     9     7    10     7    10     9
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.2     1  0.01     1     0    10    10     9     8    10    10
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.2     2  0.01     0     1    10     2     9     3    10     9
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.3     1  0.01     1     0     9    10    10     3    10    10
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.3     2  0.01     0     1    10     0    10     2    10    10
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.1     1     3     3     0    10     9    10     9     9    10
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.1     2     3     0     3    10     9    10    10    10    10
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.2     1     3     3     0     9    10     9    10     9     9
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.2     2     3     0     3    10     1     9     6    10    10
+
+
+    P     Q SIGMA C_BETA0     A_HITS      B_HITS      C_HITS
+  0.3     1     3     3     0     9     9     9     9    10     8
+
+ERROR: (execution) Unable to allocate sufficient memory. At least 442072 more bytes
+       required.
+
+ Error occured in module UNTRANSF at line  4210 column  21
+ called   from    module TRIM     at line  4356 column   9
+ operation : &                    at line  4210 column  39
+ operands  : #TEM1001, #TEM1002
+#TEM1001    257 rows    215 cols    (numeric)
+#TEM1002    257 rows    215 cols    (numeric)
+
+ stmt: ASSIGN                     at line  4210 column  21
+
+NOTE: Paused in module UNTRANSF.
+Exiting IML.
+NOTE: PROCEDURE IML used:
+      real time           3:13:22.849
+      cpu time            3:11:13.050
+
+
+5773  if singular then do;
+     --
+     180
+
+ERROR 180-322: Statement is not valid or it is used out of proper order.
+
+5773                       b=a#.;
+                           -
+                           180
+
+ERROR 180-322: Statement is not valid or it is used out of proper order.
+
+5773                              print msg;
+                                  -----
+                                  180
+
+ERROR 180-322: Statement is not valid or it is used out of proper order.
+
+5773                                         print b;
+                                             -----
+                                             180
+
+ERROR 180-322: Statement is not valid or it is used out of proper order.
+
+5773                                                                call
+push(onerror);
+                                                                    ----
+                                                                    180
+
+ERROR 180-322: Statement is not valid or it is used out of proper order.
+
+5773
+ resume;
+
+------
+
+180
+
+ERROR 180-322: Statement is not valid or it is used out of proper order.
+
+5773
+ end;
+
+---
+
+180
+
+ERROR 180-322: Statement is not valid or it is used out of proper order.
+
+5774  if singular then do;
+      --
+      180
+
+ERROR 180-322: Statement is not valid or it is used out of proper order.
+
+5774                       b=a#.;
+                           -
+                           180
+
+ERROR 180-322: Statement is not valid or it is used out of proper order.
+
+5774                              print msg;
+                                  -----
+                                  180
+
+ERROR 180-322: Statement is not valid or it is used out of proper order.
+
+5774                                         print b;
+                                             -----
+                                             180
+
+ERROR 180-322: Statement is not valid or it is used out of proper order.
+
+5774                                                                call
+push(onerror); resume; end;

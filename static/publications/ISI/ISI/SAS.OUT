@@ -1,0 +1,83 @@
+Model fitting - LISTWISE DELETION              02:51 Friday, August 20, 1993   1
+
+The LOGISTIC Procedure
+
+Data Set: WORK.TEMP    
+Response Variable: ISH       outcome
+Response Levels: 2
+Number of Observations: 65
+Link Function: Logit
+
+
+     Response Profile
+ 
+Ordered
+  Value  ISH         Count
+
+      1  fail           12
+      2  success        53
+
+WARNING: 20 observation(s) were deleted due to missing values for the response 
+         or explanatory variables.
+
+
+                Simple Statistics for Explanatory Variables
+ 
+                                Standard
+Variable            Mean       Deviation         Minimum         Maximum
+
+DRG1            0.230769        0.424604               0          1.0000    
+DRG2            0.430769        0.499038               0          1.0000    
+DIBS            4.000000        5.741842               0         28.0000    
+DNS            13.261538       19.524245               0         99.0000    
+POK             0.630769        0.486352               0          1.0000    
+ST              0.569231        0.499038               0          1.0000    
+
+
+                    Criteria for Assessing Model Fit
+ 
+                            Intercept
+              Intercept        and   
+Criterion       Only       Covariates    Chi-Square for Covariates
+
+AIC              64.182        65.913         .                          
+SC               66.356        81.134         .                          
+-2 LOG L         62.182        51.913       10.269 with 6 DF (p=0.1138)  
+Score              .             .           9.773 with 6 DF (p=0.1346)  
+
+
+                   Analysis of Maximum Likelihood Estimates
+ 
+           Parameter    Standard      Wald           Pr >      Standardized
+Variable    Estimate      Error    Chi-Square     Chi-Square     Estimate  
+
+INTERCPT     -4.6511      1.5014       9.5960         0.0019              .   
+DRG1          1.7221      1.0430       2.7262         0.0987       0.403127   
+DRG2          0.3637      0.9043       0.1617         0.6876       0.100057   
+DIBS          0.1128      0.0558       4.0903         0.0431       0.357041   
+DNS           0.0297      0.0166       3.2129         0.0731       0.319471   
+POK           0.8613      0.7960       1.1707         0.2793       0.230955   
+ST            1.4799      0.8782       2.8398         0.0920       0.407164   
+Model fitting - LISTWISE DELETION              02:51 Friday, August 20, 1993   2
+
+The LOGISTIC Procedure
+
+Association of Predicted Probabilities and Observed Responses
+
+ Concordant = 75.9%          Somers' D = 0.520
+ Discordant = 23.9%          Gamma     = 0.521
+ Tied       =  0.2%          Tau-a     = 0.159
+ (636 pairs)                 c         = 0.760
+
+
+Estimated Covariance Matrix
+
+Variable  INTERCPT      DRG1      DRG2      DIBS       DNS       POK        ST
+
+INTERCPT    2.2543  -1.05081  -0.71313  -0.04103  -0.01301  -0.57924  -0.95691
+DRG1      -1.05081  1.087769  0.526953  0.021005   0.00778  0.074855  0.316591
+DRG2      -0.71313  0.526953  0.817821  0.009966  0.002987  -0.03531  0.246988
+DIBS      -0.04103  0.021005  0.009966   0.00311  0.000283  0.002329  0.010618
+DNS       -0.01301   0.00778  0.002987  0.000283  0.000274  0.000973  0.003831
+POK       -0.57924  0.074855  -0.03531  0.002329  0.000973  0.633694  0.117606
+ST        -0.95691  0.316591  0.246988  0.010618  0.003831  0.117606  0.771187
