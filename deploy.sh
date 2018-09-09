@@ -8,6 +8,7 @@ hugo -t hugo-academic # if using a theme, replace with `hugo -t <YOURTHEME>`
 # Go To Public folder
 cd public
 # Add changes to git.
+git pull
 git add .
 
 # Commit changes.
