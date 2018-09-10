@@ -13,6 +13,6 @@ list_format = 2
 
 # Optional featured image (relative to `static/img/` folder).
 [header]
-image = "header/NY_public_library.jpg"
+image = "headers/NY_public_library.jpg"
 caption = ""
 +++
