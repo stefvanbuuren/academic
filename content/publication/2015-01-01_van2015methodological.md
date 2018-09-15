@@ -2,7 +2,7 @@
 title = "Methodological Developments in Growth Modeling"
 date = "2015-01-01"
 publication_types = ["1"]
-authors = ["S van Buuren"]
+authors = ["**S. van Buuren**"]
 publication = ""
 abstract = ""
 abstract_short = ""

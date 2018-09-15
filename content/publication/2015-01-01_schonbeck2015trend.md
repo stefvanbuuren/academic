@@ -2,8 +2,8 @@
 title = "Trend in Height of Turkish and Moroccan Children Living in The Netherlands"
 date = "2015-01-01"
 publication_types = ["2"]
-authors = ["Y. Schonbeck", "P. van Dommelen", "R.A. HiraSing", "S. van Buuren"]
-publication = "In: PloS ONE, (10), 5, _pp. e0124686_"
+authors = ["Y. Schonbeck", "P. van Dommelen", "R.A. Hirasing", "**S. van Buuren**"]
+publication = "PloS ONE, (10), 5, _e0124686_"
 abstract = ""
 abstract_short = ""
 image_preview = ""

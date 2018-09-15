@@ -2,7 +2,7 @@
 title = "Ontwerp simulatiemodel leefbaarheid"
 date = "2001-01-01"
 publication_types = ["4"]
-authors = ["P.G.M. van der Heijden", "S. van Buuren", "J.J. Radder", "H.M.E. Miedema"]
+authors = ["P.G.M. van der Heijden", "**S. van Buuren**", "J.J. Radder", "H.M.E. Miedema"]
 publication = ""
 abstract = ""
 abstract_short = ""

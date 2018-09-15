@@ -2,7 +2,7 @@
 title = "JGZ-richtlijn: Signalering van en verwijscriteria bij kleine lichaamslengte"
 date = "2010-01-01"
 publication_types = ["4"]
-authors = ["N.H. Heerdink-Obenhuijsen", "P. van Dommelen", "M. Kamphuis", "S. van Buuren", "E.J.C. Coenen-van Vroonhoven", "P.H. Verkerk"]
+authors = ["N.H. Heerdink-Obenhuijsen", "P. van Dommelen", "M. Kamphuis", "**S. van Buuren**", "E.J.C. Coenen-van Vroonhoven", "P.H. Verkerk"]
 publication = ""
 abstract = ""
 abstract_short = ""
