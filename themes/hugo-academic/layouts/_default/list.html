@@ -7,12 +7,9 @@
 {{ partial "header.html" . }}
 {{ partial "navbar.html" . }}
 
-{{ partial "header_image.html" . }}
+{{ partial "page_header.html" . }}
 
-<div class="article-container">
-
-  {{ with .Title }}<h1>{{ . }}</h1>{{ end }}
-
+<div class="universal-wrapper">
   {{ with .Content }}
   <div class="article-style" itemprop="articleBody">{{ . }}</div>
   {{ end }}
@@ -20,7 +17,7 @@
   {{ $paginator := .Paginate .Data.Pages }}
   {{ range $paginator.Pages }}
   <div>
-    <h2><a href="{{ .Permalink }}">{{ .Title }}</a></h2>
+    <h2><a href="{{ .RelPermalink }}">{{ .Title }}</a></h2>
     <div class="article-style">
       {{ if .Params.summary }}
       {{ .Params.summary | plainify | emojify }}
@@ -34,7 +31,6 @@
   {{ end }}
 
   {{ partial "pagination" . }}
-
 </div>
 {{ partial "footer_container.html" . }}
 {{ partial "footer.html" . }}
