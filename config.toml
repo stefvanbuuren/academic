@@ -237,7 +237,7 @@ enableGitInfo = false
 
   [[params.social]]
     icon = "github"
-    icon_pack = "ai"
+    icon_pack = "fa"
     link = "https://github.com/stefvanbuuren"
 
   # Link to a PDF of your resume/CV from the About widget.
